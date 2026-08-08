@@ -1,0 +1,203 @@
+:root {
+  --primary: #165DFF;
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --day: #165DFF;
+  --night: #7C3AED;
+  --rest: #9CA3AF;
+  --holi: #F53F3F;
+  --add: #00B42A;
+  --ded: #F53F3F;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding-bottom: 64px;
+  min-height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  padding-top: calc(12px + env(safe-area-inset-top));
+  background: var(--primary);
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand { font-size: 17px; font-weight: 700; }
+.userbar { display: flex; align-items: center; gap: 8px; }
+#userSelect {
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 14px;
+  background: rgba(255,255,255,0.95);
+  color: var(--text);
+}
+.icon-btn {
+  border: none;
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 18px;
+  cursor: pointer;
+}
+.icon-btn:active { background: rgba(255,255,255,0.35); }
+
+main { padding: 16px; max-width: 640px; margin: 0 auto; }
+h2 { font-size: 15px; color: var(--muted); margin: 18px 4px 10px; font-weight: 600; }
+
+.card {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 6px 18px rgba(15,23,42,0.05);
+  margin-bottom: 8px;
+}
+.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.field:last-child { border-bottom: none; }
+.field > span { font-size: 14px; }
+.field input[type="number"] {
+  width: 120px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 15px;
+  text-align: right;
+}
+.field.check { justify-content: flex-start; gap: 10px; }
+.field.check input { width: 18px; height: 18px; }
+
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.item-row:last-child { border-bottom: none; }
+.item-row input.name { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; }
+.item-row input.amount {
+  width: 90px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px; font-size: 14px; text-align: right;
+}
+.item-row select {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 13px;
+  color: #fff; background: var(--add);
+}
+.item-row select.deduct { background: var(--ded); }
+.item-row .del { border: none; background: none; color: var(--ded); font-size: 18px; cursor: pointer; }
+
+.btn {
+  border: none; border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  cursor: pointer; width: 100%;
+}
+.btn.ghost { background: #eef2ff; color: var(--primary); margin-top: 8px; }
+
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 12px; }
+.cal-head .icon-btn { background: var(--primary); }
+.cal-title { font-size: 16px; font-weight: 700; }
+
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.dot.day { background: var(--day); }
+.dot.night { background: var(--night); }
+.dot.rest { background: var(--rest); }
+.dot.holi { background: var(--holi); }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.cal-dow { text-align: center; font-size: 12px; color: var(--muted); padding: 4px 0; }
+.cal-cell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+}
+.cal-cell .dnum { position: absolute; top: 4px; left: 6px; font-size: 11px; color: var(--muted); }
+.cal-cell .mark { font-size: 16px; }
+.cal-cell.day { background: #e8f0ff; border-color: var(--day); }
+.cal-cell.night { background: #f1e9ff; border-color: var(--night); }
+.cal-cell.rest { background: #f3f4f6; border-color: var(--rest); }
+.cal-cell.holi::after {
+  content: ""; position: absolute; right: 5px; top: 5px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--holi);
+}
+.cal-cell.today { outline: 2px solid var(--primary); }
+
+.hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 12px; }
+
+/* 试算结果 */
+.result-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+.result-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px;
+}
+.result-row .label { color: var(--muted); }
+.result-row .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+.result-row.add .val { color: var(--add); }
+.result-row.ded .val { color: var(--ded); }
+.result-total {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 12px; padding-top: 12px; border-top: 2px solid var(--primary);
+  font-size: 17px; font-weight: 800;
+}
+.result-total .val { color: var(--primary); font-variant-numeric: tabular-nums; }
+.empty { color: var(--muted); text-align: center; padding: 20px; font-size: 14px; }
+
+.tabbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  background: #fff;
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 10;
+}
+.tab-btn {
+  flex: 1;
+  border: none;
+  background: none;
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+}
+.tab-btn span { font-size: 11px; }
+.tab-btn.active { color: var(--primary); font-weight: 700; }
