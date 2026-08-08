@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="薪资计算器" />
-  <meta name="theme-color" content="#165DFF" />
+  <meta name="theme-color" content="#007AFF" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon.svg" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -14,94 +14,200 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">薪资计算器</div>
-    <div class="userbar">
-      <select id="userSelect" aria-label="选择用户"></select>
-      <button id="addUserBtn" class="icon-btn" title="新增用户">+</button>
+
+<!-- 登录 -->
+<div class="login" id="login">
+  <div class="box">
+    <div class="emoji">📋</div>
+    <h1>排班薪资计算器</h1>
+    <p>输入你的名字，数据独立保存</p>
+    <input id="nameInput" class="input" type="text" maxlength="20" placeholder="请输入你的名字"
+           style="margin-bottom:14px;text-align:center;font-size:17px;"
+           onkeydown="if(event.key==='Enter')loginSubmit()" />
+    <button class="btn btn-primary" onclick="loginSubmit()">进入</button>
+    <div class="err" id="loginError"></div>
+  </div>
+</div>
+
+<!-- 顶部栏 -->
+<header class="topbar">
+  <div class="title">薪资计算器</div>
+  <button class="user" id="userBtn" onclick="switchUser()">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    <span id="userLabel">我</span>
+  </button>
+</header>
+
+<main class="page" id="page" hidden>
+
+  <!-- 今日大卡 -->
+  <section class="hero">
+    <div class="row">
+      <span class="shift-badge" id="curShiftBadge">白班</span>
+      <span class="holi-badge hidden" id="holidayBadge">节假日 ×2</span>
     </div>
-  </header>
+    <div class="amount money" id="todayMoney">¥0.00</div>
+    <div class="sub" id="todayProgress">加载中…</div>
+    <div class="progress"><i id="heroProgress" style="width:0%"></i></div>
+  </section>
 
-  <main id="view">
-    <section class="tab" id="tab-config" hidden>
-      <h2>参数设置</h2>
-      <div class="card">
-        <label class="field">
-          <span>月基本工资（元）</span>
-          <input type="number" id="cfg-base" inputmode="decimal" />
-        </label>
-        <label class="field">
-          <span>月计薪天数</span>
-          <input type="number" id="cfg-standardDays" inputmode="decimal" step="0.25" />
-        </label>
-        <label class="field">
-          <span>白班补贴（元/天）</span>
-          <input type="number" id="cfg-dayAllow" inputmode="decimal" />
-        </label>
-        <label class="field">
-          <span>夜班补贴（元/天）</span>
-          <input type="number" id="cfg-nightAllow" inputmode="decimal" />
-        </label>
-        <label class="field">
-          <span>法定节假日倍率</span>
-          <input type="number" id="cfg-holidayMult" inputmode="decimal" step="0.5" />
-        </label>
-        <label class="field check">
-          <input type="checkbox" id="cfg-paidHolidayRest" />
-          <span>法定节假日（休息）按带薪假计发日工资</span>
-        </label>
-      </div>
+  <!-- 统计 -->
+  <section class="stats" style="margin-top:16px">
+    <div class="stat"><span class="k">本月已赚</span><span class="v money" id="monthMoney">¥0</span></div>
+    <div class="stat"><span class="k">工作天数</span><span class="v" id="workedDaysCard">0 / 0</span></div>
+    <div class="stat"><span class="k">今日时薪</span><span class="v" id="todayHourly">¥0</span></div>
+    <div class="stat"><span class="k">已完成工时</span><span class="v" id="hoursRate">0h / 0h</span></div>
+  </section>
 
-      <h2>自定义工资项</h2>
-      <div class="card">
-        <div id="itemsList"></div>
-        <button id="addItemBtn" class="btn ghost">+ 添加工资项</button>
+  <!-- 月历 -->
+  <section class="group">
+    <div class="cal-head">
+      <button onclick="prevMonth()">‹</button>
+      <div class="title" id="calTitle">2026年8月</div>
+      <button onclick="nextMonth()">›</button>
+    </div>
+    <div class="list" style="padding:14px">
+      <div class="cal-week">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span style="color:#ff3b30">六</span><span style="color:#ff3b30">日</span>
       </div>
-    </section>
-
-    <section class="tab" id="tab-shifts" hidden>
-      <div class="cal-head">
-        <button class="icon-btn" id="shiftsPrev">prev</button>
-        <div class="cal-title" id="shiftsTitle"></div>
-        <button class="icon-btn" id="shiftsNext">next</button>
-      </div>
+      <div class="cal-grid" id="calGrid"></div>
       <div class="legend">
-        <span><i class="dot day"></i>白班</span>
-        <span><i class="dot night"></i>夜班</span>
-        <span><i class="dot rest"></i>休息</span>
-        <span><i class="dot holi"></i>节假日</span>
+        <span><i style="background:#007aff"></i>白班</span>
+        <span><i style="background:#5e5ce6"></i>夜班</span>
+        <span><i style="background:#8e8e93"></i>休息</span>
+        <span><i style="background:#ff9500"></i>节假日</span>
       </div>
-      <div class="cal-grid" id="shiftsGrid"></div>
-      <p class="hint">点按日期切换：白班 到 夜班 到 休息 到 白班</p>
-    </section>
+    </div>
+  </section>
 
-    <section class="tab" id="tab-holidays" hidden>
-      <div class="cal-head">
-        <button class="icon-btn" id="holiPrev">prev</button>
-        <div class="cal-title" id="holiTitle"></div>
-        <button class="icon-btn" id="holiNext">next</button>
+  <!-- 图表 -->
+  <section class="group">
+    <div class="charts">
+      <div class="chart-card">
+        <div class="ct">工时占比</div>
+        <svg id="doughnut" viewBox="0 0 120 120" aria-label="工时占比"></svg>
+        <div class="chart-legend">
+          <span><i style="background:#007aff;width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px"></i><span id="dayCountLabel">白班 0天</span></span>
+          <span><i style="background:#5e5ce6;width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px"></i><span id="nightCountLabel">夜班 0天</span></span>
+        </div>
       </div>
-      <div class="cal-grid" id="holiGrid"></div>
-      <p class="hint">点按日期标记或取消节假日（标记时可填写名称）</p>
-    </section>
-
-    <section class="tab" id="tab-calc" hidden>
-      <div class="cal-head">
-        <button class="icon-btn" id="calcPrev">prev</button>
-        <div class="cal-title" id="calcTitle"></div>
-        <button class="icon-btn" id="calcNext">next</button>
+      <div class="chart-card">
+        <div class="ct">收益趋势</div>
+        <svg id="line" viewBox="0 0 200 120" preserveAspectRatio="none" aria-label="收益趋势"></svg>
+        <div class="chart-legend"><span id="predictLabel">预计 ¥0</span></div>
       </div>
-      <div class="card" id="calcResult"></div>
-    </section>
-  </main>
+    </div>
+  </section>
 
-  <nav class="tabbar">
-    <button class="tab-btn active" data-tab="config">settings<span>参数</span></button>
-    <button class="tab-btn" data-tab="shifts">calendar<span>排班</span></button>
-    <button class="tab-btn" data-tab="holidays">flag<span>节假日</span></button>
-    <button class="tab-btn" data-tab="calc">calc<span>试算</span></button>
-  </nav>
+</main>
 
-  <script src="app.js"></script>
+<!-- 底部 Tab Bar -->
+<nav class="tabbar" id="tabbar" hidden>
+  <button onclick="openSettingsSheet()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    参数设置
+  </button>
+  <button onclick="openSalarySheet()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    工资组成
+  </button>
+</nav>
+
+<!-- 遮罩 + Sheet：班次编辑 -->
+<div class="scrim" id="scrim" onclick="closeSheets()"></div>
+
+<div class="sheet" id="shiftSheet">
+  <div class="grabber"></div>
+  <h3 id="shiftTitle">修改班次</h3>
+  <div class="shift-pick">
+    <button class="day"    onclick="selectShift('day')"   id="btnDay">白班</button>
+    <button class="night"  onclick="selectShift('night')" id="btnNight">夜班</button>
+    <button class="rest"   onclick="selectShift('rest')"  id="btnRest">休息</button>
+  </div>
+  <div class="list" style="margin-bottom:16px">
+    <div class="item">
+      <span class="k">标记为节假日</span>
+      <label class="switch"><input type="checkbox" id="modalHoliday" onchange="modalHoliday=this.checked"><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </div>
+  <button class="btn btn-primary" onclick="saveShift()">保存</button>
+  <button class="btn btn-quiet" style="margin-top:10px" onclick="closeSheets()">取消</button>
+</div>
+
+<!-- Sheet：参数设置 -->
+<div class="sheet" id="settingsSheet">
+  <div class="grabber"></div>
+  <h3>参数设置</h3>
+  <div class="field">
+    <label>白班时间</label>
+    <div class="field-row">
+      <input type="time" id="inputDayStart" class="input" onchange="updateHoursCalc()">
+      <span style="color:var(--label2)">—</span>
+      <input type="time" id="inputDayEnd" class="input" onchange="updateHoursCalc()">
+    </div>
+    <div style="font-size:12px;color:var(--label2);margin-top:6px">工时自动计算：<span id="dayHoursCalc">9</span> 小时</div>
+  </div>
+  <div class="field" id="nightTimeWrap">
+    <label>夜班时间</label>
+    <div class="field-row">
+      <input type="time" id="inputNightStart" class="input" onchange="updateHoursCalc()">
+      <span style="color:var(--label2)">—</span>
+      <input type="time" id="inputNightEnd" class="input" onchange="updateHoursCalc()">
+      <span style="font-size:11px;color:var(--label2)">次日</span>
+    </div>
+    <div style="font-size:12px;color:var(--label2);margin-top:6px">工时自动计算：<span id="nightHoursCalc">15</span> 小时</div>
+  </div>
+  <div class="list" style="margin-bottom:16px">
+    <div class="item">
+      <span class="k">启用夜班</span>
+      <label class="switch"><input type="checkbox" id="nightToggle" onchange="toggleNight(this.checked)"><span class="track"></span><span class="knob"></span></label>
+    </div>
+  </div>
+  <div class="field-row" style="gap:10px;margin-bottom:16px">
+    <button class="btn btn-quiet" style="margin:0" onclick="exportCSV()">导出排班</button>
+    <button class="btn btn-quiet" style="margin:0" onclick="document.getElementById('importFile').click()">导入排班</button>
+  </div>
+  <input type="file" id="importFile" accept=".csv" class="hidden" onchange="importCSV(event)">
+  <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+</div>
+
+<!-- Sheet：工资组成 -->
+<div class="sheet" id="salarySheet">
+  <div class="grabber"></div>
+  <h3>工资组成</h3>
+  <div class="field"><label>基本工资 (¥)</label><input type="number" id="inputBaseSalary" class="input" oninput="updateSalaryTotal()"></div>
+  <div class="field"><label>岗位工资 (¥)</label><input type="number" id="inputPostSalary" class="input" oninput="updateSalaryTotal()"></div>
+  <div class="field-row" style="gap:10px">
+    <div class="field" style="flex:1;margin-bottom:14px"><label>交通补贴 (¥)</label><input type="number" id="inputTransport" class="input" oninput="updateSalaryTotal()"></div>
+    <div class="field" style="flex:1;margin-bottom:14px"><label>通讯补贴 (¥)</label><input type="number" id="inputComm" class="input" oninput="updateSalaryTotal()"></div>
+  </div>
+  <div class="field-row" style="gap:10px">
+    <div class="field" style="flex:1;margin-bottom:14px"><label>误餐补贴 (¥)</label><input type="number" id="inputMeal" class="input" oninput="updateSalaryTotal()"></div>
+    <div class="field" style="flex:1;margin-bottom:14px"><label>住房补贴 (¥)</label><input type="number" id="inputHousing" class="input" oninput="updateSalaryTotal()"></div>
+  </div>
+  <div class="field-row" style="gap:10px">
+    <div class="field" style="flex:1;margin-bottom:14px"><label>加班费 (¥)</label><input type="number" id="inputOvertime" class="input" oninput="updateSalaryTotal()"></div>
+    <div class="field" style="flex:1;margin-bottom:14px"><label>奖惩 (¥)</label><input type="number" id="inputBonus" class="input" oninput="updateSalaryTotal()"></div>
+  </div>
+  <div class="list" style="margin:4px 0 16px">
+    <div class="item">
+      <span class="k">结算日（每月几号起）</span>
+      <input type="number" id="inputCycleStart" class="input" style="width:64px;text-align:center" min="1" max="28">
+    </div>
+    <div class="item">
+      <span class="k">节假日倍率</span>
+      <input type="number" id="inputHolidayRate" class="input" style="width:64px;text-align:center" step="0.5" min="1" oninput="updateSalaryTotal()">
+    </div>
+    <div class="item">
+      <span class="k">月薪合计</span>
+      <span class="v money" id="salaryTotal" style="color:var(--blue);font-weight:700">¥0</span>
+    </div>
+  </div>
+  <button class="btn btn-primary" onclick="saveSalary()">保存工资组成</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
 </body>
 </html>
