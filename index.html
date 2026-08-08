@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="薪资计算器" />
+  <meta name="theme-color" content="#165DFF" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <title>排班薪资计算器</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">薪资计算器</div>
+    <div class="userbar">
+      <select id="userSelect" aria-label="选择用户"></select>
+      <button id="addUserBtn" class="icon-btn" title="新增用户">+</button>
+    </div>
+  </header>
+
+  <main id="view">
+    <section class="tab" id="tab-config" hidden>
+      <h2>参数设置</h2>
+      <div class="card">
+        <label class="field">
+          <span>月基本工资（元）</span>
+          <input type="number" id="cfg-base" inputmode="decimal" />
+        </label>
+        <label class="field">
+          <span>月计薪天数</span>
+          <input type="number" id="cfg-standardDays" inputmode="decimal" step="0.25" />
+        </label>
+        <label class="field">
+          <span>白班补贴（元/天）</span>
+          <input type="number" id="cfg-dayAllow" inputmode="decimal" />
+        </label>
+        <label class="field">
+          <span>夜班补贴（元/天）</span>
+          <input type="number" id="cfg-nightAllow" inputmode="decimal" />
+        </label>
+        <label class="field">
+          <span>法定节假日倍率</span>
+          <input type="number" id="cfg-holidayMult" inputmode="decimal" step="0.5" />
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="cfg-paidHolidayRest" />
+          <span>法定节假日（休息）按带薪假计发日工资</span>
+        </label>
+      </div>
+
+      <h2>自定义工资项</h2>
+      <div class="card">
+        <div id="itemsList"></div>
+        <button id="addItemBtn" class="btn ghost">+ 添加工资项</button>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-shifts" hidden>
+      <div class="cal-head">
+        <button class="icon-btn" id="shiftsPrev">prev</button>
+        <div class="cal-title" id="shiftsTitle"></div>
+        <button class="icon-btn" id="shiftsNext">next</button>
+      </div>
+      <div class="legend">
+        <span><i class="dot day"></i>白班</span>
+        <span><i class="dot night"></i>夜班</span>
+        <span><i class="dot rest"></i>休息</span>
+        <span><i class="dot holi"></i>节假日</span>
+      </div>
+      <div class="cal-grid" id="shiftsGrid"></div>
+      <p class="hint">点按日期切换：白班 到 夜班 到 休息 到 白班</p>
+    </section>
+
+    <section class="tab" id="tab-holidays" hidden>
+      <div class="cal-head">
+        <button class="icon-btn" id="holiPrev">prev</button>
+        <div class="cal-title" id="holiTitle"></div>
+        <button class="icon-btn" id="holiNext">next</button>
+      </div>
+      <div class="cal-grid" id="holiGrid"></div>
+      <p class="hint">点按日期标记或取消节假日（标记时可填写名称）</p>
+    </section>
+
+    <section class="tab" id="tab-calc" hidden>
+      <div class="cal-head">
+        <button class="icon-btn" id="calcPrev">prev</button>
+        <div class="cal-title" id="calcTitle"></div>
+        <button class="icon-btn" id="calcNext">next</button>
+      </div>
+      <div class="card" id="calcResult"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="config">settings<span>参数</span></button>
+    <button class="tab-btn" data-tab="shifts">calendar<span>排班</span></button>
+    <button class="tab-btn" data-tab="holidays">flag<span>节假日</span></button>
+    <button class="tab-btn" data-tab="calc">calc<span>试算</span></button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
