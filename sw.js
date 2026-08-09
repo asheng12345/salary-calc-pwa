@@ -1,5 +1,5 @@
 /* Service Worker — 离线缓存（排班薪资计算器 PWA） */
-var CACHE = 'salary-app-v1';
+var CACHE = 'salary-app-v2';
 var FILES = [
   '.',
   'index.html',
