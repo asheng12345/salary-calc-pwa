@@ -1,18 +1,27 @@
-/* 排班薪资计算器 · Apple 风格 PWA · 纯前端 localStorage
-   薪资模型复刻原 PHP 版 index.html（固定月薪制 + 班次循环 + 工时比例 + 节假日倍率） */
+/* 排班薪资计算器 · Apple 风格 PWA
+   薪资模型复刻原 PHP 版（固定月薪制 + 班次循环 + 工时比例 + 节假日倍率）
+   数据存储：每个用户在仓库 data/ 下存一个加密 JSON 文件，凭姓名派生密钥读写 */
 (function () {
   'use strict';
 
   // ===== 常量 =====
   var CYCLE_WITH_NIGHT = ['day', 'day', 'rest', 'rest', 'night', 'night'];
   var CYCLE_NO_NIGHT = ['day', 'day', 'rest', 'rest'];
-  var BASE_DAY = 3;
   var PROFILES_KEY = 'salaryProfiles';
   var USER_KEY = 'salaryCurrentUser';
 
+  // ===== 云端存储（GitHub Contents API） =====
+  var GH_OWNER = 'asheng12345';
+  var GH_REPO = 'salary-calc-pwa';
+  // 部署时替换为：仅授权本仓库 Contents 读写的细粒度 PAT。
+  // 公开仓库下此 token 等同于公开可写，已与用户确认接受该风险。
+  var GH_TOKEN = '__GITHUB_PAT__';
+  var APP_SALT = 'salary-calc-pwa-v1';
+
   // ===== 状态 =====
-  var profiles = loadProfiles();
+  var profiles = {};
   var currentUser = '';
+  var currentSha = null;
   var cfg, salary, shifts, holidays;
   var viewYear, viewMonth;
   var modalDate = '', modalShift = 'day', modalHoliday = false;
@@ -25,16 +34,26 @@
   function getShiftType(dateStr) { var s = shifts.find(function (x) { return x.date === dateStr; }); return s ? s.type : null; }
   function isHoliday(dateStr) { return holidays.indexOf(dateStr) >= 0; }
   function getDaysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+  function parseDateStr(s) { return new Date(parseInt(s.slice(0, 4), 10), parseInt(s.slice(5, 7), 10) - 1, parseInt(s.slice(8, 10), 10)); }
 
-  function loadProfiles() { try { return JSON.parse(localStorage.getItem(PROFILES_KEY)) || {}; } catch (e) { return {}; } }
-  function defaultCfg() { return { dayStart: 9, dayEnd: 18, nightStart: 18, nightEnd: 9, dayShiftHours: 9, nightShiftHours: 15, enableNight: true }; }
+  function defaultCfg() { return { dayStart: 9, dayEnd: 18, nightStart: 18, nightEnd: 9, dayShiftHours: 9, nightShiftHours: 15, enableNight: true, cycleAnchor: '2025-01-03' }; }
   function defaultSalary() { return { baseSalary: 3000, postSalary: 1500, transport: 200, comm: 100, meal: 300, housing: 400, overtime: 0, bonus: 0, holidayRate: 2, cycleStart: 25 }; }
   function defaultProfile() { return { cfg: defaultCfg(), salary: defaultSalary(), shifts: [], holidays: [] }; }
 
+  function persistLocal(name) {
+    if (!name) return;
+    profiles[name] = { cfg: cfg, salary: salary, shifts: shifts, holidays: holidays };
+    localStorage.setItem('salaryCache_' + name, JSON.stringify(profiles[name]));
+  }
+  function cloudEnabled() { return !!GH_TOKEN && GH_TOKEN.indexOf('__') !== 0; }
   function persist() {
     if (!currentUser) return;
-    profiles[currentUser] = { cfg: cfg, salary: salary, shifts: shifts, holidays: holidays };
-    localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+    persistLocal(currentUser);
+    if (cloudEnabled()) {
+      saveUserToRepo(currentUser, profiles[currentUser], currentSha)
+        .then(function (sha) { currentSha = sha; })
+        .catch(function () { showToast('云同步失败，已存本地'); });
+    }
   }
 
   function loadUser(name) {
@@ -46,11 +65,76 @@
     holidays = Array.isArray(p.holidays) ? p.holidays.slice() : [];
   }
 
-  // ===== 班次循环 =====
+  // ===== 加密与云端存储 =====
+  function bytesToB64(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
+  function b64ToBytes(b64) { var s = atob(b64), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+  function b64Unicode(str) { return btoa(unescape(encodeURIComponent(str))); }
+  function sha256Hex(str) {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
+      .then(function (h) { return Array.prototype.map.call(new Uint8Array(h), function (b) { return ('0' + b.toString(16)).slice(-2); }).join(''); });
+  }
+  function deriveKey(name) {
+    return crypto.subtle.importKey('raw', new TextEncoder().encode(name), 'PBKDF2', false, ['deriveKey'])
+      .then(function (base) {
+        return crypto.subtle.deriveKey(
+          { name: 'PBKDF2', salt: new TextEncoder().encode(APP_SALT), iterations: 100000, hash: 'SHA-256' },
+          base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      });
+  }
+  function encryptObj(name, obj) {
+    return deriveKey(name).then(function (key) {
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(JSON.stringify(obj)))
+        .then(function (ct) { return bytesToB64(iv) + ':' + bytesToB64(ct); });
+    });
+  }
+  function decryptObj(name, blob) {
+    return deriveKey(name).then(function (key) {
+      var p = String(blob).split(':'); if (p.length < 2) throw new Error('bad blob');
+      var iv = b64ToBytes(p[0]), ct = b64ToBytes(p[1]);
+      return crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct)
+        .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); });
+    });
+  }
+  function ghPath(name) {
+    return sha256Hex(name).then(function (h) { return '/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/data/' + h + '.json'; });
+  }
+  function loadUserFromRepo(name) {
+    return ghPath(name)
+      .then(function (p) { return fetch('https://api.github.com' + p, { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }); })
+      .then(function (res) {
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error('读取失败 ' + res.status);
+        return res.json();
+      })
+      .then(function (j) {
+        if (!j || !j.content) return null;
+        var payload = JSON.parse(atob(j.content));
+        return decryptObj(name, payload.data).then(function (obj) { return { obj: obj, sha: j.sha }; });
+      });
+  }
+  function saveUserToRepo(name, obj, sha) {
+    return encryptObj(name, obj)
+      .then(function (blob) {
+        return ghPath(name).then(function (p) {
+          var payload = { message: '更新 ' + name + ' ' + new Date().toISOString(), content: b64Unicode(JSON.stringify({ v: 1, name: name, data: blob })) };
+          if (sha) payload.sha = sha;
+          return fetch('https://api.github.com' + p, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        });
+      })
+      .then(function (res) { if (!res.ok) throw new Error('写入失败 ' + res.status); return res.json(); })
+      .then(function (j) { return j.content ? j.content.sha : null; });
+  }
+
+  // ===== 班次循环（真正跨月连续，锚点为 cfg.cycleAnchor） =====
   function getCycle() { return cfg.enableNight ? CYCLE_WITH_NIGHT : CYCLE_NO_NIGHT; }
   function calcCycleShift(y, m, d) {
     var cycle = getCycle(), len = cycle.length;
-    var anchor = new Date(y, m - 1, BASE_DAY);
+    var anchor = parseDateStr(cfg.cycleAnchor || '2025-01-03');
     var target = new Date(y, m - 1, d);
     var diff = Math.round((target - anchor) / 86400000);
     var idx = ((diff % len) + len) % len;
@@ -72,7 +156,7 @@
       buildCycleMonthShift(y, m).forEach(function (g) {
         if (!shifts.find(function (s) { return s.date === g.date; })) shifts.push(g);
       });
-      persist();
+      persistLocal(currentUser);
     }
   }
 
@@ -129,32 +213,13 @@
       else if (now >= s1) { todaySeconds = Math.floor((now - s1) / 1000); todayInfo = '工作中 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm' + (todayIsHoliday ? ' · 节假日' : ''); }
       else { todayInfo = '白班 ' + String(cfg.dayStart).padStart(2, '0') + ':00 开始' + (todayIsHoliday ? ' · 节假日' : ''); }
     } else if (todayShift === 'night') {
+      // 夜班归属“今晚”，仅计今晚开始后的实时进度；昨晚的夜班已计入 completedMoney，避免跨 midnight 双算
       shiftHours = cfg.nightShiftHours;
-      var yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-      var ydStr = fmtDate(yest.getFullYear(), yest.getMonth() + 1, yest.getDate());
-      var lastNightWasNight = getShiftType(ydStr) === 'night';
-      var lastNightStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, cfg.nightStart, 0, 0);
-      var lastNightEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.nightEnd, 0, 0);
       var tonightStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.nightStart, 0, 0);
       if (now >= tonightStart) {
         todaySeconds = Math.min(Math.floor((now - tonightStart) / 1000), cfg.nightShiftHours * 3600);
         todayInfo = '工作中 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm' + (todayIsHoliday ? ' · 节假日' : '');
-      } else if (lastNightWasNight && now < lastNightEnd && now >= new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)) {
-        todaySeconds = Math.min(Math.floor((now - lastNightStart) / 1000), cfg.nightShiftHours * 3600);
-        todayInfo = '工作中 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm' + (todayIsHoliday ? ' · 节假日' : '');
-      } else if (lastNightWasNight && now >= lastNightEnd) {
-        todaySeconds = cfg.nightShiftHours * 3600; todayInfo = '夜班已完成' + (todayIsHoliday ? ' · 节假日' : '');
       } else { todayInfo = '夜班 ' + String(cfg.nightStart).padStart(2, '0') + ':00 开始' + (todayIsHoliday ? ' · 节假日' : ''); }
-    }
-
-    if (cfg.enableNight && todayShift !== 'night' && todaySeconds === 0) {
-      var y2 = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-      var yd2 = fmtDate(y2.getFullYear(), y2.getMonth() + 1, y2.getDate());
-      if (getShiftType(yd2) === 'night') {
-        var ns = new Date(y2.getFullYear(), y2.getMonth(), y2.getDate(), cfg.nightStart, 0, 0);
-        var ne = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.nightEnd, 0, 0);
-        if (now <= ne) { todaySeconds = Math.floor((now - ns) / 1000); shiftHours = cfg.nightShiftHours; todayInfo = '夜班收尾 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm'; }
-      }
     }
 
     var todayHolidayExtra = (todayIsHoliday && todayShift !== 'rest') ? baseDailySalary * (salary.holidayRate - 1) : 0;
@@ -186,7 +251,7 @@
       todayMoney: todayMoney, monthMoney: monthMoney, predictMoney: predictMoney, workedHours: workedHours, rate: rate,
       todayInfo: todayInfo, todayShift: todayShift || 'rest', todayIsHoliday: todayIsHoliday, todayFullPay: todayFullPay,
       dayCount: dayCount, nightCount: nightCount, monthlyTotal: monthlyTotal, startDate: startDate, endDate: endDate,
-      monthTotalHours: monthTotalHours, workedDays: workedDays, totalWorkDays: totalWorkDays
+      monthTotalHours: monthTotalHours, workedDays: workedDays, totalWorkDays: totalWorkDays, dailySalary: dailySalary, baseDailySalary: baseDailySalary
     };
   }
 
@@ -266,14 +331,14 @@
     // line: 累计收益
     var sY = parseInt(range.startDate.slice(0, 4)), sM = parseInt(range.startDate.slice(5, 7)), sD = parseInt(range.startDate.slice(8));
     var eY = parseInt(range.endDate.slice(0, 4)), eM = parseInt(range.endDate.slice(5, 7)), eD = parseInt(range.endDate.slice(8));
-    var cum = 0, labels = [], data = [];
+    var cum = 0, data = [];
     var cur = new Date(sY, sM - 1, sD), end = new Date(eY, eM - 1, eD);
     while (cur <= end) {
       var ds = fmtDate(cur.getFullYear(), cur.getMonth() + 1, cur.getDate());
       var s = cyc.find(function (x) { return x.date === ds; });
       if (s && s.type !== 'rest') {
         var h = s.type === 'day' ? cfg.dayShiftHours : s.type === 'night' ? cfg.nightShiftHours : 0;
-        var pay = info.monthTotalHours > 0 ? info.monthlyTotal * (h / info.monthTotalHours) : info.dailySalary;
+        var pay = info.monthTotalHours > 0 ? info.monthlyTotal * (h / info.monthTotalHours) : (info.dailySalary || 0);
         if (isHoliday(ds)) pay += info.baseDailySalary * (salary.holidayRate - 1);
         cum += pay;
       }
@@ -335,6 +400,7 @@
     $('inputNightEnd').value = p2(ne) + ':00';
     $('nightToggle').checked = cfg.enableNight;
     $('nightTimeWrap').style.display = cfg.enableNight ? '' : 'none';
+    $('inputCycleAnchor').value = cfg.cycleAnchor || '2025-01-03';
     updateHoursCalc();
     showSheet('settingsSheet');
   }
@@ -381,6 +447,7 @@
       cfg.nightShiftHours = cfg.nightEnd > cfg.nightStart ? cfg.nightEnd - cfg.nightStart : 24 - cfg.nightStart + cfg.nightEnd;
       if (cfg.nightShiftHours <= 0 || cfg.nightShiftHours > 24) { showToast('夜班时间有误'); return; }
     }
+    cfg.cycleAnchor = $('inputCycleAnchor').value || '2025-01-03';
     persist(); closeSheets(); render(); showToast('参数已保存');
   }
 
@@ -482,17 +549,26 @@
   function loginSubmit() {
     var name = $('nameInput').value.trim();
     if (!name) { $('loginError').textContent = '名字不能为空'; return; }
-    $('loginError').textContent = '';
-    currentUser = name; localStorage.setItem(USER_KEY, name);
+    $('loginError').textContent = '登录中…';
+    currentUser = name; localStorage.setItem(USER_KEY, name); currentSha = null;
+    var cacheKey = 'salaryCache_' + name;
+    var cached = localStorage.getItem(cacheKey);
+    if (cached) { try { profiles[name] = JSON.parse(cached); } catch (e) {} }
     if (!profiles[name]) profiles[name] = defaultProfile();
     loadUser(name);
     var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
     ensureMonthShifts(viewYear, viewMonth);
     hideLogin(); $('userLabel').textContent = name; render(); startTimer();
     showToast('欢迎，' + name);
+    // 后台与仓库同步（未配置 token 时纯本地运行，不发请求）
+    if (cloudEnabled()) {
+      loadUserFromRepo(name).then(function (r) {
+        if (r) { profiles[name] = r.obj; currentSha = r.sha; loadUser(name); ensureMonthShifts(viewYear, viewMonth); persistLocal(name); render(); }
+      }).catch(function () { showToast('云同步失败，已用本地数据'); });
+    }
   }
   function switchUser() {
-    currentUser = ''; localStorage.removeItem(USER_KEY); stopTimer();
+    currentUser = ''; currentSha = null; localStorage.removeItem(USER_KEY); stopTimer();
     $('nameInput').value = ''; showLogin();
   }
 
@@ -511,17 +587,23 @@
   function stopTimer() { if (timerInterval) clearInterval(timerInterval); if (minuteInterval) clearInterval(minuteInterval); }
 
   // ===== 初始化 =====
-  function init() {
+  async function init() {
     var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
     currentUser = localStorage.getItem(USER_KEY) || '';
-    if (currentUser && profiles[currentUser]) {
-      loadUser(currentUser);
-      ensureMonthShifts(viewYear, viewMonth);
-      $('userLabel').textContent = currentUser;
-      hideLogin(); render(); startTimer();
-    } else {
-      showLogin();
-    }
+    if (currentUser) {
+      var cacheKey = 'salaryCache_' + currentUser;
+      var cached = localStorage.getItem(cacheKey);
+      if (cached) { try { profiles[currentUser] = JSON.parse(cached); } catch (e) {} }
+      if (profiles[currentUser]) {
+        loadUser(currentUser);
+        ensureMonthShifts(viewYear, viewMonth);
+        $('userLabel').textContent = currentUser;
+        hideLogin(); render(); startTimer();
+        loadUserFromRepo(currentUser).then(function (r) {
+          if (r) { profiles[currentUser] = r.obj; currentSha = r.sha; loadUser(currentUser); ensureMonthShifts(viewYear, viewMonth); persistLocal(currentUser); render(); }
+        }).catch(function () {});
+      } else { showLogin(); }
+    } else { showLogin(); }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
   }
 
