@@ -10,12 +10,8 @@
   var PROFILES_KEY = 'salaryProfiles';
   var USER_KEY = 'salaryCurrentUser';
 
-  // ===== 云端存储（GitHub Contents API） =====
-  var GH_OWNER = 'asheng12345';
-  var GH_REPO = 'salary-calc-pwa';
-  // 部署时替换为：仅授权本仓库 Contents 读写的细粒度 PAT。
-  // 公开仓库下此 token 等同于公开可写，已与用户确认接受该风险。
-  var GH_TOKEN = '__GITHUB_PAT__';
+  // ===== 云端存储（经 Cloudflare Worker 代理，token 存于 Worker Secret，永不进前端） =====
+  var WORKER_URL = '';            // 在“参数设置”里填写你的 Worker 地址，留空则仅本地
   var APP_SALT = 'salary-calc-pwa-v1';
 
   // ===== 状态 =====
@@ -45,7 +41,7 @@
     profiles[name] = { cfg: cfg, salary: salary, shifts: shifts, holidays: holidays };
     localStorage.setItem('salaryCache_' + name, JSON.stringify(profiles[name]));
   }
-  function cloudEnabled() { return !!GH_TOKEN && GH_TOKEN.indexOf('__') !== 0; }
+  function cloudEnabled() { return !!WORKER_URL && WORKER_URL.indexOf('__') !== 0; }
   function persist() {
     if (!currentUser) return;
     persistLocal(currentUser);
@@ -97,11 +93,11 @@
     });
   }
   function ghPath(name) {
-    return sha256Hex(name).then(function (h) { return '/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/data/' + h + '.json'; });
+    return sha256Hex(name).then(function (h) { return '/contents/data/' + h + '.json'; });
   }
   function loadUserFromRepo(name) {
     return ghPath(name)
-      .then(function (p) { return fetch('https://api.github.com' + p, { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }); })
+      .then(function (p) { return fetch(WORKER_URL + p, { headers: { 'Accept': 'application/vnd.github+json' } }); })
       .then(function (res) {
         if (res.status === 404) return null;
         if (!res.ok) throw new Error('读取失败 ' + res.status);
@@ -119,9 +115,9 @@
         return ghPath(name).then(function (p) {
           var payload = { message: '更新 ' + name + ' ' + new Date().toISOString(), content: b64Unicode(JSON.stringify({ v: 1, name: name, data: blob })) };
           if (sha) payload.sha = sha;
-          return fetch('https://api.github.com' + p, {
+          return fetch(WORKER_URL + p, {
             method: 'PUT',
-            headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+            headers: { 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
         });
@@ -401,6 +397,7 @@
     $('nightToggle').checked = cfg.enableNight;
     $('nightTimeWrap').style.display = cfg.enableNight ? '' : 'none';
     $('inputCycleAnchor').value = cfg.cycleAnchor || '2025-01-03';
+    $('inputWorkerUrl').value = WORKER_URL || '';
     updateHoursCalc();
     showSheet('settingsSheet');
   }
@@ -448,7 +445,13 @@
       if (cfg.nightShiftHours <= 0 || cfg.nightShiftHours > 24) { showToast('夜班时间有误'); return; }
     }
     cfg.cycleAnchor = $('inputCycleAnchor').value || '2025-01-03';
-    persist(); closeSheets(); render(); showToast('参数已保存');
+    WORKER_URL = ($('inputWorkerUrl').value || '').trim().replace(/\/$/, '');
+    localStorage.setItem('salaryWorkerUrl', WORKER_URL);
+    function afterSync() { closeSheets(); render(); showToast(cloudEnabled() ? '参数已保存 · 已同步云端' : '参数已保存（仅本地）'); }
+    if (cloudEnabled() && currentUser) {
+      // 先取 sha 再推送，避免文件已存在时 409
+      loadUserFromRepo(currentUser).then(function (r) { if (r) currentSha = r.sha; persist(); afterSync(); }).catch(function () { persist(); afterSync(); });
+    } else { persist(); afterSync(); }
   }
 
   // ===== 工资组成 Sheet =====
@@ -590,6 +593,7 @@
   async function init() {
     var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
     currentUser = localStorage.getItem(USER_KEY) || '';
+    WORKER_URL = (localStorage.getItem('salaryWorkerUrl') || '').trim().replace(/\/$/, '');
     if (currentUser) {
       var cacheKey = 'salaryCache_' + currentUser;
       var cached = localStorage.getItem(cacheKey);
