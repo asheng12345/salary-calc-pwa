@@ -162,6 +162,11 @@
     <input type="date" id="inputCycleAnchor" class="input">
     <div style="font-size:12px;color:var(--label2);margin-top:6px">设为排班循环里任意一个"白班"日，决定跨月连续排班的相位</div>
   </div>
+  <div class="field" style="margin:4px 0 16px">
+    <label>云端同步地址（Cloudflare Worker）</label>
+    <input type="url" id="inputWorkerUrl" class="input" placeholder="https://你的-worker.xxx.workers.dev" autocapitalize="off" spellcheck="false">
+    <div style="font-size:12px;color:var(--label2);margin-top:6px">填入你的 Worker 地址后，数据会加密存入 GitHub 仓库并多端同步；留空则仅本机保存</div>
+  </div>
   <div class="list" style="margin-bottom:16px">
     <div class="item">
       <span class="k">启用夜班</span>
