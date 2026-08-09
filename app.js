@@ -608,7 +608,32 @@
         }).catch(function () {});
       } else { showLogin(); }
     } else { showLogin(); }
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+    registerSW();
+  }
+
+  // ===== Service Worker 注册与自动更新 =====
+  // 旧版 cache-first 会让手机端长期停在旧页面，这里检测到新版本后自动刷新一次。
+  function registerSW() {
+    if (!('serviceWorker' in navigator)) return;
+    var refreshed = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (refreshed) return;
+      refreshed = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then(function (reg) {
+      reg.update();
+      setInterval(function () { reg.update(); }, 60 * 60 * 1000);
+      reg.addEventListener('updatefound', function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', function () {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            sw.postMessage('SKIP_WAITING');
+          }
+        });
+      });
+    }).catch(function () {});
   }
 
   // 内联 onclick/onchange 处理器只能调用全局函数，故将 IIFE 内函数挂到 window
