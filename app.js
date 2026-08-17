@@ -10,9 +10,7 @@
   var PROFILES_KEY = 'salaryProfiles';
   var USER_KEY = 'salaryCurrentUser';
 
-  // ===== 云端存储（经 Cloudflare Worker 代理，token 存于 Worker Secret，永不进前端） =====
-  var WORKER_URL = '';            // 在“参数设置”里填写你的 Worker 地址，留空则仅本地
-  var APP_SALT = 'salary-calc-pwa-v1';
+  // ===== 存储：仅本机 localStorage（明文），无云端 =====
 
   // ===== 状态 =====
   var profiles = {};
@@ -41,15 +39,9 @@
     profiles[name] = { cfg: cfg, salary: salary, shifts: shifts, holidays: holidays };
     localStorage.setItem('salaryCache_' + name, JSON.stringify(profiles[name]));
   }
-  function cloudEnabled() { return !!WORKER_URL && WORKER_URL.indexOf('__') !== 0; }
   function persist() {
     if (!currentUser) return;
     persistLocal(currentUser);
-    if (cloudEnabled()) {
-      saveUserToRepo(currentUser, profiles[currentUser], currentSha)
-        .then(function (sha) { currentSha = sha; })
-        .catch(function () { showToast('云同步失败，已存本地'); });
-    }
   }
 
   function loadUser(name) {
@@ -61,70 +53,7 @@
     holidays = Array.isArray(p.holidays) ? p.holidays.slice() : [];
   }
 
-  // ===== 加密与云端存储 =====
-  function bytesToB64(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
-  function b64ToBytes(b64) { var s = atob(b64), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
-  function b64Unicode(str) { return btoa(unescape(encodeURIComponent(str))); }
-  function sha256Hex(str) {
-    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
-      .then(function (h) { return Array.prototype.map.call(new Uint8Array(h), function (b) { return ('0' + b.toString(16)).slice(-2); }).join(''); });
-  }
-  function deriveKey(name) {
-    return crypto.subtle.importKey('raw', new TextEncoder().encode(name), 'PBKDF2', false, ['deriveKey'])
-      .then(function (base) {
-        return crypto.subtle.deriveKey(
-          { name: 'PBKDF2', salt: new TextEncoder().encode(APP_SALT), iterations: 100000, hash: 'SHA-256' },
-          base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      });
-  }
-  function encryptObj(name, obj) {
-    return deriveKey(name).then(function (key) {
-      var iv = crypto.getRandomValues(new Uint8Array(12));
-      return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(JSON.stringify(obj)))
-        .then(function (ct) { return bytesToB64(iv) + ':' + bytesToB64(ct); });
-    });
-  }
-  function decryptObj(name, blob) {
-    return deriveKey(name).then(function (key) {
-      var p = String(blob).split(':'); if (p.length < 2) throw new Error('bad blob');
-      var iv = b64ToBytes(p[0]), ct = b64ToBytes(p[1]);
-      return crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct)
-        .then(function (pt) { return JSON.parse(new TextDecoder().decode(pt)); });
-    });
-  }
-  function ghPath(name) {
-    return sha256Hex(name).then(function (h) { return '/contents/data/' + h + '.json'; });
-  }
-  function loadUserFromRepo(name) {
-    return ghPath(name)
-      .then(function (p) { return fetch(WORKER_URL + p, { headers: { 'Accept': 'application/vnd.github+json' } }); })
-      .then(function (res) {
-        if (res.status === 404) return null;
-        if (!res.ok) throw new Error('读取失败 ' + res.status);
-        return res.json();
-      })
-      .then(function (j) {
-        if (!j || !j.content) return null;
-        var payload = JSON.parse(atob(j.content));
-        return decryptObj(name, payload.data).then(function (obj) { return { obj: obj, sha: j.sha }; });
-      });
-  }
-  function saveUserToRepo(name, obj, sha) {
-    return encryptObj(name, obj)
-      .then(function (blob) {
-        return ghPath(name).then(function (p) {
-          var payload = { message: '更新 ' + name + ' ' + new Date().toISOString(), content: b64Unicode(JSON.stringify({ v: 1, name: name, data: blob })) };
-          if (sha) payload.sha = sha;
-          return fetch(WORKER_URL + p, {
-            method: 'PUT',
-            headers: { 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-        });
-      })
-      .then(function (res) { if (!res.ok) throw new Error('写入失败 ' + res.status); return res.json(); })
-      .then(function (j) { return j.content ? j.content.sha : null; });
-  }
+  // （云端与加密层已移除，纯本机存储）
 
   // ===== 班次循环（真正跨月连续，锚点为 cfg.cycleAnchor） =====
   function getCycle() { return cfg.enableNight ? CYCLE_WITH_NIGHT : CYCLE_NO_NIGHT; }
@@ -196,36 +125,60 @@
     var monthTotalHours = b.monthTotalHours, dailySalary = b.dailySalary, baseDailySalary = b.baseDailySalary;
     var dayCount = b.dayCount, nightCount = b.nightCount, holidayWorkDays = b.holidayWorkDays, monthlyTotal = b.monthlyTotal;
     var startDate = b.startDate, endDate = b.endDate;
-    var todayIsHoliday = isHoliday(todayStr);
+    var todayShift = getShiftType(todayStr);
+    var pad2 = function (n) { return String(n).padStart(2, '0'); };
+    var fmtHM = function (sec) { return Math.floor(sec / 3600) + 'h' + Math.floor((sec % 3600) / 60) + 'm'; };
+    var todaySeconds = 0, todayInfo = '', shiftHours = 0, activeBelongsTo = null, activeType = todayShift;
 
-    var todaySeconds = 0, todayInfo = '', todayShift = getShiftType(todayStr), shiftHours = cfg.dayShiftHours;
-
-    if (todayShift === 'rest') { todayInfo = '休息中'; shiftHours = 0; }
-    else if (todayShift === 'day') {
+    // 判定当前进行中的班次（按真实时间窗，支持夜班跨午夜）
+    if (todayShift === 'rest') {
+      todayInfo = '休息中'; shiftHours = 0;
+    } else if (todayShift === 'day') {
       shiftHours = cfg.dayShiftHours;
       var s1 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.dayStart, 0, 0);
       var e1 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.dayEnd, 0, 0);
-      if (now >= e1) { todaySeconds = cfg.dayShiftHours * 3600; todayInfo = '白班已完成' + (todayIsHoliday ? ' · 节假日' : ''); }
-      else if (now >= s1) { todaySeconds = Math.floor((now - s1) / 1000); todayInfo = '工作中 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm' + (todayIsHoliday ? ' · 节假日' : ''); }
-      else { todayInfo = '白班 ' + String(cfg.dayStart).padStart(2, '0') + ':00 开始' + (todayIsHoliday ? ' · 节假日' : ''); }
-    } else if (todayShift === 'night') {
-      // 夜班归属“今晚”，仅计今晚开始后的实时进度；昨晚的夜班已计入 completedMoney，避免跨 midnight 双算
+      if (now >= e1) { todaySeconds = cfg.dayShiftHours * 3600; todayInfo = '白班已完成'; }
+      else if (now >= s1) { todaySeconds = Math.floor((now - s1) / 1000); todayInfo = '工作中 ' + fmtHM(todaySeconds); }
+      else { todayInfo = '白班 ' + pad2(cfg.dayStart) + ':00 开始'; }
+      activeBelongsTo = todayStr;
+    } else {
+      // 夜班（含跨午夜）：nightStart → 次日 nightEnd
       shiftHours = cfg.nightShiftHours;
-      var tonightStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.nightStart, 0, 0);
-      if (now >= tonightStart) {
-        todaySeconds = Math.min(Math.floor((now - tonightStart) / 1000), cfg.nightShiftHours * 3600);
-        todayInfo = '工作中 ' + Math.floor(todaySeconds / 3600) + 'h' + Math.floor((todaySeconds % 3600) / 60) + 'm' + (todayIsHoliday ? ' · 节假日' : '');
-      } else { todayInfo = '夜班 ' + String(cfg.nightStart).padStart(2, '0') + ':00 开始' + (todayIsHoliday ? ' · 节假日' : ''); }
+      var y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+      var prev = new Date(y, m, d - 1);
+      var prevStr = fmtDate(prev.getFullYear(), prev.getMonth() + 1, prev.getDate());
+      var prevShift = getShiftType(prevStr);
+      var midnight = new Date(y, m, d, 0, 0, 0);
+      var nsToday = new Date(y, m, d, cfg.nightStart, 0, 0);
+      var neToday = new Date(y, m, d, cfg.nightEnd, 0, 0);
+      var firstLeg = (24 - cfg.nightStart) * 3600; // 首日段 nightStart→24:00
+      if (now >= nsToday) {
+        // 今天夜班首日段（nightStart 之后）
+        todaySeconds = Math.min(Math.floor((now - nsToday) / 1000), cfg.nightShiftHours * 3600);
+        activeBelongsTo = todayStr;
+        todayInfo = '工作中 ' + fmtHM(todaySeconds);
+      } else if (now < neToday && prevShift === 'night') {
+        // 次晨收尾段：归属“昨天”那班（0:00 → nightEnd）
+        var secondLeg = Math.floor((now - midnight) / 1000);
+        todaySeconds = Math.min(firstLeg + secondLeg, cfg.nightShiftHours * 3600);
+        activeBelongsTo = prevStr; activeType = 'night';
+        todayInfo = '工作中 ' + fmtHM(todaySeconds);
+      } else {
+        todayInfo = '夜班 ' + pad2(cfg.nightStart) + ':00 开始';
+      }
     }
+    var activeDate = activeBelongsTo || todayStr;
+    var todayIsHoliday = isHoliday(activeDate);
 
-    var todayHolidayExtra = (todayIsHoliday && todayShift !== 'rest') ? baseDailySalary * (salary.holidayRate - 1) : 0;
+    var todayHolidayExtra = (todayIsHoliday && activeType !== 'rest') ? baseDailySalary * (salary.holidayRate - 1) : 0;
     var todayFullPay = monthTotalHours > 0 ? monthlyTotal * (shiftHours / monthTotalHours) + todayHolidayExtra : 0;
     var todayMoney = shiftHours > 0 ? todayFullPay * (todaySeconds / (shiftHours * 3600)) : 0;
 
     var cyc = shifts.filter(function (s) { return s.date >= startDate && s.date <= endDate; });
     var completedMoney = 0, workedHours = 0;
+    var excludeDate = activeBelongsTo || todayStr; // 进行中班的归属日不重复计入，避免跨午夜双算
     cyc.forEach(function (s) {
-      if (s.date < todayStr && s.type !== 'rest') {
+      if (s.date < excludeDate && s.type !== 'rest') {
         var h = s.type === 'day' ? cfg.dayShiftHours : s.type === 'night' ? cfg.nightShiftHours : 0;
         var dayPay = monthTotalHours > 0 ? monthlyTotal * (h / monthTotalHours) : dailySalary;
         if (isHoliday(s.date)) dayPay += baseDailySalary * (salary.holidayRate - 1);
@@ -245,7 +198,7 @@
 
     return {
       todayMoney: todayMoney, monthMoney: monthMoney, predictMoney: predictMoney, workedHours: workedHours, rate: rate,
-      todayInfo: todayInfo, todayShift: todayShift || 'rest', todayIsHoliday: todayIsHoliday, todayFullPay: todayFullPay,
+      todayInfo: todayInfo, todayShift: activeType, todayIsHoliday: todayIsHoliday, todayFullPay: todayFullPay,
       dayCount: dayCount, nightCount: nightCount, monthlyTotal: monthlyTotal, startDate: startDate, endDate: endDate,
       monthTotalHours: monthTotalHours, workedDays: workedDays, totalWorkDays: totalWorkDays, dailySalary: dailySalary, baseDailySalary: baseDailySalary
     };
@@ -397,7 +350,6 @@
     $('nightToggle').checked = cfg.enableNight;
     $('nightTimeWrap').style.display = cfg.enableNight ? '' : 'none';
     $('inputCycleAnchor').value = cfg.cycleAnchor || '2025-01-03';
-    $('inputWorkerUrl').value = WORKER_URL || '';
     updateHoursCalc();
     showSheet('settingsSheet');
   }
@@ -445,13 +397,7 @@
       if (cfg.nightShiftHours <= 0 || cfg.nightShiftHours > 24) { showToast('夜班时间有误'); return; }
     }
     cfg.cycleAnchor = $('inputCycleAnchor').value || '2025-01-03';
-    WORKER_URL = ($('inputWorkerUrl').value || '').trim().replace(/\/$/, '');
-    localStorage.setItem('salaryWorkerUrl', WORKER_URL);
-    function afterSync() { closeSheets(); render(); showToast(cloudEnabled() ? '参数已保存 · 已同步云端' : '参数已保存（仅本地）'); }
-    if (cloudEnabled() && currentUser) {
-      // 先取 sha 再推送，避免文件已存在时 409
-      loadUserFromRepo(currentUser).then(function (r) { if (r) currentSha = r.sha; persist(); afterSync(); }).catch(function () { persist(); afterSync(); });
-    } else { persist(); afterSync(); }
+    persist(); closeSheets(); render(); showToast('参数已保存（仅本地）');
   }
 
   // ===== 工资组成 Sheet =====
@@ -563,12 +509,6 @@
     ensureMonthShifts(viewYear, viewMonth);
     hideLogin(); $('userLabel').textContent = name; render(); startTimer();
     showToast('欢迎，' + name);
-    // 后台与仓库同步（未配置 token 时纯本地运行，不发请求）
-    if (cloudEnabled()) {
-      loadUserFromRepo(name).then(function (r) {
-        if (r) { profiles[name] = r.obj; currentSha = r.sha; loadUser(name); ensureMonthShifts(viewYear, viewMonth); persistLocal(name); render(); }
-      }).catch(function () { showToast('云同步失败，已用本地数据'); });
-    }
   }
   function switchUser() {
     currentUser = ''; currentSha = null; localStorage.removeItem(USER_KEY); stopTimer();
@@ -593,7 +533,6 @@
   async function init() {
     var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
     currentUser = localStorage.getItem(USER_KEY) || '';
-    WORKER_URL = (localStorage.getItem('salaryWorkerUrl') || '').trim().replace(/\/$/, '');
     if (currentUser) {
       var cacheKey = 'salaryCache_' + currentUser;
       var cached = localStorage.getItem(cacheKey);
@@ -603,9 +542,6 @@
         ensureMonthShifts(viewYear, viewMonth);
         $('userLabel').textContent = currentUser;
         hideLogin(); render(); startTimer();
-        loadUserFromRepo(currentUser).then(function (r) {
-          if (r) { profiles[currentUser] = r.obj; currentSha = r.sha; loadUser(currentUser); ensureMonthShifts(viewYear, viewMonth); persistLocal(currentUser); render(); }
-        }).catch(function () {});
       } else { showLogin(); }
     } else { showLogin(); }
     registerSW();
