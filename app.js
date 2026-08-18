@@ -131,37 +131,38 @@
     var todaySeconds = 0, todayInfo = '', shiftHours = 0, activeBelongsTo = null, activeType = todayShift;
 
     // 判定当前进行中的班次（按真实时间窗，支持夜班跨午夜）
-    if (todayShift === 'rest') {
+    var y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+    var prev = new Date(y, m, d - 1);
+    var prevStr = fmtDate(prev.getFullYear(), prev.getMonth() + 1, prev.getDate());
+    var prevShift = getShiftType(prevStr);
+    var midnight = new Date(y, m, d, 0, 0, 0);
+    var nsToday = new Date(y, m, d, cfg.nightStart, 0, 0);
+    var neToday = new Date(y, m, d, cfg.nightEnd, 0, 0);
+    var firstLeg = (24 - cfg.nightStart) * 3600; // 首日段 nightStart→24:00
+
+    // 优先判定：次晨收尾段（0:00 → nightEnd），归属“昨天”那班（不受今天自身班次类型影响）
+    if (now < neToday && prevShift === 'night') {
+      var secondLeg = Math.floor((now - midnight) / 1000);
+      todaySeconds = Math.min(firstLeg + secondLeg, cfg.nightShiftHours * 3600);
+      shiftHours = cfg.nightShiftHours;
+      activeBelongsTo = prevStr; activeType = 'night';
+      todayInfo = '工作中 ' + fmtHM(todaySeconds);
+    } else if (todayShift === 'rest') {
       todayInfo = '休息中'; shiftHours = 0;
     } else if (todayShift === 'day') {
       shiftHours = cfg.dayShiftHours;
-      var s1 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.dayStart, 0, 0);
-      var e1 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.dayEnd, 0, 0);
+      var s1 = new Date(y, m, d, cfg.dayStart, 0, 0);
+      var e1 = new Date(y, m, d, cfg.dayEnd, 0, 0);
       if (now >= e1) { todaySeconds = cfg.dayShiftHours * 3600; todayInfo = '白班已完成'; }
       else if (now >= s1) { todaySeconds = Math.floor((now - s1) / 1000); todayInfo = '工作中 ' + fmtHM(todaySeconds); }
       else { todayInfo = '白班 ' + pad2(cfg.dayStart) + ':00 开始'; }
       activeBelongsTo = todayStr;
     } else {
-      // 夜班（含跨午夜）：nightStart → 次日 nightEnd
+      // 夜班首日段（nightStart 之后）；0:00→nightStart 之间尚未开始
       shiftHours = cfg.nightShiftHours;
-      var y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-      var prev = new Date(y, m, d - 1);
-      var prevStr = fmtDate(prev.getFullYear(), prev.getMonth() + 1, prev.getDate());
-      var prevShift = getShiftType(prevStr);
-      var midnight = new Date(y, m, d, 0, 0, 0);
-      var nsToday = new Date(y, m, d, cfg.nightStart, 0, 0);
-      var neToday = new Date(y, m, d, cfg.nightEnd, 0, 0);
-      var firstLeg = (24 - cfg.nightStart) * 3600; // 首日段 nightStart→24:00
       if (now >= nsToday) {
-        // 今天夜班首日段（nightStart 之后）
         todaySeconds = Math.min(Math.floor((now - nsToday) / 1000), cfg.nightShiftHours * 3600);
         activeBelongsTo = todayStr;
-        todayInfo = '工作中 ' + fmtHM(todaySeconds);
-      } else if (now < neToday && prevShift === 'night') {
-        // 次晨收尾段：归属“昨天”那班（0:00 → nightEnd）
-        var secondLeg = Math.floor((now - midnight) / 1000);
-        todaySeconds = Math.min(firstLeg + secondLeg, cfg.nightShiftHours * 3600);
-        activeBelongsTo = prevStr; activeType = 'night';
         todayInfo = '工作中 ' + fmtHM(todaySeconds);
       } else {
         todayInfo = '夜班 ' + pad2(cfg.nightStart) + ':00 开始';
