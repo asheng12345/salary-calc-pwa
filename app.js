@@ -338,28 +338,29 @@
     var y = viewYear, m = viewMonth, days = getDaysInMonth(y, m);
     var now = new Date();
     var todayStr = fmtDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
-    var rows = [], worked = [];
+    // 只显示「已经上班后」：非休息 且 日期 ≤ 今天（未来的、休息的不显示）
+    var shown = [];
     for (var d = 1; d <= days; d++) {
       var ds = fmtDate(y, m, d);
       var type = getShiftType(ds);
-      var pay = (ds === todayStr && info.todayShift !== 'rest') ? info.todayMoney : dayPayFor(ds);
-      rows.push({ day: d, type: type, pay: pay, isToday: ds === todayStr });
-      if (type && type !== 'rest') worked.push({ day: d, type: type, pay: pay, isToday: ds === todayStr });
+      if (!type || type === 'rest' || ds > todayStr) continue;
+      var pay = (ds === todayStr) ? info.todayMoney : dayPayFor(ds);
+      shown.push({ day: d, type: type, pay: pay, isToday: ds === todayStr });
     }
-    var totalMonth = worked.reduce(function (s, x) { return s + x.pay; }, 0);
-    $('boardSummary').textContent = m + '月 · 工作日 ' + worked.length + ' 天 · 当月收入 ¥' + Math.round(totalMonth);
+    var totalMonth = shown.reduce(function (s, x) { return s + x.pay; }, 0);
+    $('boardSummary').textContent = m + '月 · 已上班 ' + shown.length + ' 天 · 已赚 ¥' + Math.round(totalMonth);
 
-    // 条形图（每工作日一根柱）
-    var W = Math.max(300, worked.length * 16), H = 150, padB = 18, padT = 8;
-    var maxPay = worked.length ? Math.max.apply(null, worked.map(function (x) { return x.pay; })) : 1;
+    // 条形图（已上班的每天一根柱）
+    var W = Math.max(300, shown.length * 16), H = 150, padB = 18, padT = 8;
+    var maxPay = shown.length ? Math.max.apply(null, shown.map(function (x) { return x.pay; })) : 1;
     if (maxPay <= 0) maxPay = 1;
     var svgB = $('dayBar');
     svgB.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-    var bw = Math.min(14, (W - 8) / Math.max(worked.length, 1) - 4);
-    var gap = worked.length ? (W - 8 - worked.length * bw) / worked.length : 0;
+    var bw = Math.min(14, (W - 8) / Math.max(shown.length, 1) - 4);
+    var gap = shown.length ? (W - 8 - shown.length * bw) / shown.length : 0;
     var g = '';
-    if (worked.length) {
-      worked.forEach(function (x, i) {
+    if (shown.length) {
+      shown.forEach(function (x, i) {
         var x0 = 4 + i * (bw + gap);
         var bh = Math.max(2, (x.pay / maxPay) * (H - padB - padT));
         var col = x.type === 'night' ? '#5e5ce6' : '#007aff';
@@ -368,19 +369,19 @@
         g += '<text x="' + (x0 + bw / 2).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="9" fill="#8e8e93">' + x.day + '</text>';
       });
     } else {
-      g = '<text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle" font-size="12" fill="#8e8e93">本月无排班</text>';
+      g = '<text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle" font-size="12" fill="#8e8e93">本月尚无已上班记录</text>';
     }
     svgB.innerHTML = g;
 
-    // 清单（每天一行，休息灰显）
+    // 清单（已上班的每天一行）
     var list = $('dayList'); list.innerHTML = '';
-    rows.forEach(function (r) {
+    shown.forEach(function (r) {
       var row = document.createElement('div');
-      row.className = 'dl-row' + (r.isToday ? ' today' : '') + (r.type ? ' ' + r.type : '');
-      var tLabel = r.type ? shiftTypeLabel(r.type) : '未排';
+      row.className = 'dl-row' + (r.isToday ? ' today' : '') + ' ' + r.type;
+      var tLabel = shiftTypeLabel(r.type);
       var barW = Math.max(0, Math.min(100, (r.pay / maxPay) * 100));
       row.innerHTML =
-        '<div class="dl-date">' + m + '/' + r.day + ' <span class="dl-t ' + (r.type || '') + '">' + tLabel + '</span></div>' +
+        '<div class="dl-date">' + m + '/' + r.day + ' <span class="dl-t ' + r.type + '">' + tLabel + '</span></div>' +
         '<div class="dl-bar"><i style="width:' + barW.toFixed(0) + '%"></i></div>' +
         '<div class="dl-amt money">¥' + (r.pay > 0 ? Math.round(r.pay) : '0') + '</div>';
       list.appendChild(row);
