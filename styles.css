@@ -260,3 +260,27 @@ body {
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .hidden { display: none !important; }
+
+/* ===== 每日收入看板 ===== */
+.board { background: var(--group); border-radius: var(--radius-card); padding: 16px; box-shadow: var(--shadow); }
+.board-head { font-size: 14px; font-weight: 600; color: var(--label); margin-bottom: 12px; }
+.daybar-wrap { width: 100%; overflow-x: auto; }
+.daybar-wrap svg { width: 100%; min-width: 300px; height: 150px; display: block; }
+.daylist { margin-top: 14px; }
+.dl-row {
+  display: grid; grid-template-columns: 96px 1fr 60px; align-items: center; gap: 10px;
+  padding: 8px 4px; border-top: 0.5px solid var(--separator);
+}
+.dl-row:first-child { border-top: none; }
+.dl-row.rest { opacity: 0.5; }
+.dl-row.today { background: var(--blue-soft); border-radius: 10px; }
+.dl-date { font-size: 14px; color: var(--label); }
+.dl-date .dl-t { font-size: 11px; margin-left: 4px; padding: 1px 6px; border-radius: 6px; }
+.dl-t.day { color: var(--blue); background: var(--blue-soft); }
+.dl-t.night { color: var(--purple); background: rgba(94, 92, 230, 0.12); }
+.dl-t.rest { color: var(--gray); background: var(--fill-quiet); }
+.dl-bar { height: 8px; border-radius: 999px; background: var(--fill-quiet); overflow: hidden; }
+.dl-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--blue); }
+.dl-row.night .dl-bar > i { background: var(--purple); }
+.dl-row.rest .dl-bar > i { background: var(--gray); }
+.dl-amt { font-size: 15px; font-weight: 600; text-align: right; color: var(--label); }
