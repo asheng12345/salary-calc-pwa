@@ -1,21 +1,17 @@
 /* 排班薪资计算器 · Apple 风格 PWA
    薪资模型复刻原 PHP 版（固定月薪制 + 班次循环 + 工时比例 + 节假日倍率）
-   数据存储：每个用户在仓库 data/ 下存一个加密 JSON 文件，凭姓名派生密钥读写 */
+   数据存储：单一本机 localStorage 明文键（salaryData），无云端、无名字分存 */
 (function () {
   'use strict';
 
   // ===== 常量 =====
   var CYCLE_WITH_NIGHT = ['day', 'day', 'rest', 'rest', 'night', 'night'];
   var CYCLE_NO_NIGHT = ['day', 'day', 'rest', 'rest'];
-  var PROFILES_KEY = 'salaryProfiles';
-  var USER_KEY = 'salaryCurrentUser';
+  var DATA_KEY = 'salaryData';
 
-  // ===== 存储：仅本机 localStorage（明文），无云端 =====
+  // ===== 存储：仅本机 localStorage（明文），无云端、无名字分存 =====
 
   // ===== 状态 =====
-  var profiles = {};
-  var currentUser = '';
-  var currentSha = null;
   var cfg, salary, shifts, holidays;
   var viewYear, viewMonth;
   var modalDate = '', modalShift = 'day', modalHoliday = false;
@@ -34,18 +30,14 @@
   function defaultSalary() { return { baseSalary: 3000, postSalary: 1500, transport: 200, comm: 100, meal: 300, housing: 400, overtime: 0, bonus: 0, holidayRate: 2, cycleStart: 25 }; }
   function defaultProfile() { return { cfg: defaultCfg(), salary: defaultSalary(), shifts: [], holidays: [] }; }
 
-  function persistLocal(name) {
-    if (!name) return;
-    profiles[name] = { cfg: cfg, salary: salary, shifts: shifts, holidays: holidays };
-    localStorage.setItem('salaryCache_' + name, JSON.stringify(profiles[name]));
+  function persistData() {
+    localStorage.setItem(DATA_KEY, JSON.stringify({ cfg: cfg, salary: salary, shifts: shifts, holidays: holidays }));
   }
-  function persist() {
-    if (!currentUser) return;
-    persistLocal(currentUser);
-  }
+  function persist() { persistData(); }
 
-  function loadUser(name) {
-    var p = profiles[name] || defaultProfile();
+  function loadData() {
+    var raw = localStorage.getItem(DATA_KEY);
+    var p = raw ? JSON.parse(raw) : defaultProfile();
     cfg = Object.assign(defaultCfg(), p.cfg || {});
     salary = Object.assign(defaultSalary(), p.salary || {});
     if (salary.cycleStart === undefined) salary.cycleStart = 25;
@@ -81,13 +73,21 @@
       buildCycleMonthShift(y, m).forEach(function (g) {
         if (!shifts.find(function (s) { return s.date === g.date; })) shifts.push(g);
       });
-      persistLocal(currentUser);
+      persistData();
     }
+  }
+  // 确保某月的上一月/下一月排班也已生成（结算周期会跨月，避免跨月日收入/时薪被算少）
+  function ensureNeighborShifts(y, m) {
+    var pm = m - 1, py = y, nm = m + 1, ny = y;
+    if (pm < 1) { pm = 12; py = y - 1; }
+    if (nm > 12) { nm = 1; ny = y + 1; }
+    ensureMonthShifts(py, pm);
+    ensureMonthShifts(ny, nm);
   }
 
   // ===== 结算周期 =====
-  function getCurrentCycleRange() {
-    var now = new Date(), y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+  function cycleRangeForDate(dateStr) {
+    var dt = parseDateStr(dateStr), y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
     var cs = salary.cycleStart || 25;
     if (cs === 1) return { startDate: fmtDate(y, m, 1), endDate: fmtDate(y, m, getDaysInMonth(y, m)) };
     if (d >= cs) {
@@ -98,24 +98,43 @@
       return { startDate: fmtDate(sy, sm, cs), endDate: fmtDate(y, m, cs) };
     }
   }
+  function getCurrentCycleRange() {
+    var n = new Date();
+    return cycleRangeForDate(fmtDate(n.getFullYear(), n.getMonth() + 1, n.getDate()));
+  }
   function calcMonthlyTotal() {
     return salary.baseSalary + salary.postSalary + salary.transport + salary.comm + salary.meal + salary.housing + salary.overtime + salary.bonus;
   }
 
   // ===== 薪资计算（复刻原版固定月薪制） =====
-  function baseCalc() {
-    var range = getCurrentCycleRange();
-    var cyc = shifts.filter(function (s) { return s.date >= range.startDate && s.date <= range.endDate; });
+  function baseCalcForRange(sd, ed) {
+    var cyc = shifts.filter(function (s) { return s.date >= sd && s.date <= ed; });
     var dayCount = cyc.filter(function (s) { return s.type === 'day'; }).length;
     var nightCount = cyc.filter(function (s) { return s.type === 'night'; }).length;
     var workDays = dayCount + nightCount;
     var monthlyTotal = calcMonthlyTotal();
     var monthTotalHours = dayCount * cfg.dayShiftHours + nightCount * cfg.nightShiftHours;
-    var hourlyRate = monthTotalHours > 0 ? monthlyTotal / monthTotalHours : 0;
     var dailySalary = workDays > 0 ? monthlyTotal / workDays : 0;
     var baseDailySalary = workDays > 0 ? salary.baseSalary / workDays : 0;
     var holidayWorkDays = cyc.filter(function (s) { return s.type !== 'rest' && isHoliday(s.date); }).length;
-    return { dayCount: dayCount, nightCount: nightCount, workDays: workDays, dailySalary: dailySalary, baseDailySalary: baseDailySalary, hourlyRate: hourlyRate, monthTotalHours: monthTotalHours, holidayWorkDays: holidayWorkDays, monthlyTotal: monthlyTotal, startDate: range.startDate, endDate: range.endDate };
+    return { dayCount: dayCount, nightCount: nightCount, workDays: workDays, dailySalary: dailySalary, baseDailySalary: baseDailySalary, monthTotalHours: monthTotalHours, holidayWorkDays: holidayWorkDays, monthlyTotal: monthlyTotal, startDate: sd, endDate: ed };
+  }
+  function baseCalc() {
+    var r = getCurrentCycleRange();
+    var b = baseCalcForRange(r.startDate, r.endDate);
+    b.hourlyRate = b.monthTotalHours > 0 ? b.monthlyTotal / b.monthTotalHours : 0;
+    return b;
+  }
+  // 某一天（按所属结算周期费率）的整班工钱 + 节假日额外
+  function dayPayFor(dateStr) {
+    var type = getShiftType(dateStr);
+    if (type === 'rest' || !type) return 0;
+    var r = cycleRangeForDate(dateStr);
+    var b = baseCalcForRange(r.startDate, r.endDate);
+    var h = type === 'day' ? cfg.dayShiftHours : cfg.nightShiftHours;
+    var pay = b.monthTotalHours > 0 ? b.monthlyTotal * (h / b.monthTotalHours) : b.dailySalary;
+    if (isHoliday(dateStr)) pay += b.baseDailySalary * (salary.holidayRate - 1);
+    return pay;
   }
 
   function calcMoney() {
@@ -225,10 +244,14 @@
   }
 
   function render() {
+    var now = new Date();
+    ensureNeighborShifts(now.getFullYear(), now.getMonth() + 1);
+    ensureNeighborShifts(viewYear, viewMonth);
     var info = calcMoney();
     setDynamic(info);
     renderCalendar();
     renderCharts(info);
+    renderDailyBoard(info);
   }
 
   function renderCalendar() {
@@ -308,6 +331,60 @@
       svg2.innerHTML = g;
     } else svg2.innerHTML = '';
     $('predictLabel').textContent = '预计 ¥' + Math.round(info.predictMoney);
+  }
+
+  // ===== 每日收入看板（范围=当前查看月份，跟随月历翻页） =====
+  function renderDailyBoard(info) {
+    var y = viewYear, m = viewMonth, days = getDaysInMonth(y, m);
+    var now = new Date();
+    var todayStr = fmtDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
+    var rows = [], worked = [];
+    for (var d = 1; d <= days; d++) {
+      var ds = fmtDate(y, m, d);
+      var type = getShiftType(ds);
+      var pay = (ds === todayStr && info.todayShift !== 'rest') ? info.todayMoney : dayPayFor(ds);
+      rows.push({ day: d, type: type, pay: pay, isToday: ds === todayStr });
+      if (type && type !== 'rest') worked.push({ day: d, type: type, pay: pay, isToday: ds === todayStr });
+    }
+    var totalMonth = worked.reduce(function (s, x) { return s + x.pay; }, 0);
+    $('boardSummary').textContent = m + '月 · 工作日 ' + worked.length + ' 天 · 当月收入 ¥' + Math.round(totalMonth);
+
+    // 条形图（每工作日一根柱）
+    var W = Math.max(300, worked.length * 16), H = 150, padB = 18, padT = 8;
+    var maxPay = worked.length ? Math.max.apply(null, worked.map(function (x) { return x.pay; })) : 1;
+    if (maxPay <= 0) maxPay = 1;
+    var svgB = $('dayBar');
+    svgB.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    var bw = Math.min(14, (W - 8) / Math.max(worked.length, 1) - 4);
+    var gap = worked.length ? (W - 8 - worked.length * bw) / worked.length : 0;
+    var g = '';
+    if (worked.length) {
+      worked.forEach(function (x, i) {
+        var x0 = 4 + i * (bw + gap);
+        var bh = Math.max(2, (x.pay / maxPay) * (H - padB - padT));
+        var col = x.type === 'night' ? '#5e5ce6' : '#007aff';
+        var ring = x.isToday ? ' stroke="#ff9500" stroke-width="2"' : '';
+        g += '<rect x="' + x0.toFixed(1) + '" y="' + (H - padB - bh).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="3" fill="' + col + '"' + ring + '/>';
+        g += '<text x="' + (x0 + bw / 2).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="9" fill="#8e8e93">' + x.day + '</text>';
+      });
+    } else {
+      g = '<text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle" font-size="12" fill="#8e8e93">本月无排班</text>';
+    }
+    svgB.innerHTML = g;
+
+    // 清单（每天一行，休息灰显）
+    var list = $('dayList'); list.innerHTML = '';
+    rows.forEach(function (r) {
+      var row = document.createElement('div');
+      row.className = 'dl-row' + (r.isToday ? ' today' : '') + (r.type ? ' ' + r.type : '');
+      var tLabel = r.type ? shiftTypeLabel(r.type) : '未排';
+      var barW = Math.max(0, Math.min(100, (r.pay / maxPay) * 100));
+      row.innerHTML =
+        '<div class="dl-date">' + m + '/' + r.day + ' <span class="dl-t ' + (r.type || '') + '">' + tLabel + '</span></div>' +
+        '<div class="dl-bar"><i style="width:' + barW.toFixed(0) + '%"></i></div>' +
+        '<div class="dl-amt money">¥' + (r.pay > 0 ? Math.round(r.pay) : '0') + '</div>';
+      list.appendChild(row);
+    });
   }
 
   // ===== 月历翻页 =====
@@ -493,27 +570,22 @@
   function showSheet(id) { $('scrim').classList.add('show'); $(id).classList.add('show'); }
   function closeSheets() { $('scrim').classList.remove('show'); var s = document.querySelectorAll('.sheet'); for (var i = 0; i < s.length; i++) s[i].classList.remove('show'); }
 
-  // ===== 登录 =====
-  function showLogin() { $('login').style.display = 'flex'; $('page').hidden = true; $('tabbar').hidden = true; }
-  function hideLogin() { $('login').style.display = 'none'; $('page').hidden = false; $('tabbar').hidden = false; }
-  function loginSubmit() {
-    var name = $('nameInput').value.trim();
-    if (!name) { $('loginError').textContent = '名字不能为空'; return; }
-    $('loginError').textContent = '登录中…';
-    currentUser = name; localStorage.setItem(USER_KEY, name); currentSha = null;
-    var cacheKey = 'salaryCache_' + name;
-    var cached = localStorage.getItem(cacheKey);
-    if (cached) { try { profiles[name] = JSON.parse(cached); } catch (e) {} }
-    if (!profiles[name]) profiles[name] = defaultProfile();
-    loadUser(name);
-    var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
-    ensureMonthShifts(viewYear, viewMonth);
-    hideLogin(); $('userLabel').textContent = name; render(); startTimer();
-    showToast('欢迎，' + name);
+  // ===== 旧数据存储迁移 / 重置 =====
+  function migrateOldStore() {
+    if (localStorage.getItem(DATA_KEY)) return;
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf('salaryCache_') === 0) {
+        var v = localStorage.getItem(k);
+        if (v) { localStorage.setItem(DATA_KEY, v); localStorage.removeItem(k); }
+        break;
+      }
+    }
   }
-  function switchUser() {
-    currentUser = ''; currentSha = null; localStorage.removeItem(USER_KEY); stopTimer();
-    $('nameInput').value = ''; showLogin();
+  function resetData() {
+    if (!window.confirm('确定清空全部数据并恢复默认？此操作不可撤销。')) return;
+    localStorage.removeItem(DATA_KEY);
+    location.reload();
   }
 
   // ===== Toast / Timer =====
@@ -531,21 +603,12 @@
   function stopTimer() { if (timerInterval) clearInterval(timerInterval); if (minuteInterval) clearInterval(minuteInterval); }
 
   // ===== 初始化 =====
-  async function init() {
+  function init() {
     var now = new Date(); viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
-    currentUser = localStorage.getItem(USER_KEY) || '';
-    if (currentUser) {
-      var cacheKey = 'salaryCache_' + currentUser;
-      var cached = localStorage.getItem(cacheKey);
-      if (cached) { try { profiles[currentUser] = JSON.parse(cached); } catch (e) {} }
-      if (profiles[currentUser]) {
-        loadUser(currentUser);
-        ensureMonthShifts(viewYear, viewMonth);
-        $('userLabel').textContent = currentUser;
-        hideLogin(); render(); startTimer();
-      } else { showLogin(); }
-    } else { showLogin(); }
-    registerSW();
+    migrateOldStore();
+    loadData();
+    ensureMonthShifts(viewYear, viewMonth);
+    render(); startTimer(); registerSW();
   }
 
   // ===== Service Worker 注册与自动更新 =====
@@ -574,8 +637,7 @@
   }
 
   // 内联 onclick/onchange 处理器只能调用全局函数，故将 IIFE 内函数挂到 window
-  window.loginSubmit = loginSubmit;
-  window.switchUser = switchUser;
+  window.resetData = resetData;
   window.prevMonth = prevMonth;
   window.nextMonth = nextMonth;
   window.openSettingsSheet = openSettingsSheet;
